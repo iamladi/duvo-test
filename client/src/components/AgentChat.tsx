@@ -60,69 +60,61 @@ export function AgentChat() {
           </div>
         )}
 
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            style={{
-              alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
-              maxWidth: "70%",
-              padding: "10px 14px",
-              borderRadius: "12px",
-              backgroundColor: msg.role === "user" ? "#0070f3" : "#f0f0f0",
-              color: msg.role === "user" ? "#fff" : "#111",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              lineHeight: "1.5",
-            }}
-          >
-            {msg.content || (msg.role === "assistant" && isStreaming ? "..." : "")}
+        {messages.map((msg, i) => (
+          <div key={msg.id} style={{ alignSelf: msg.role === "user" ? "flex-end" : "flex-start", maxWidth: "70%", display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div
+              style={{
+                padding: "10px 14px",
+                borderRadius: "12px",
+                backgroundColor: msg.role === "user" ? "#0070f3" : "#f0f0f0",
+                color: msg.role === "user" ? "#fff" : "#111",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                lineHeight: "1.5",
+              }}
+            >
+              {msg.content || (msg.role === "assistant" && isStreaming ? "..." : "")}
+            </div>
+
+            {/* Download buttons appear inline after the last assistant message */}
+            {msg.role === "assistant" && i === messages.length - 1 && createdFiles.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {createdFiles.map((file) => (
+                  <div
+                    key={file.downloadUrl}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "8px 12px",
+                      backgroundColor: "#f0f7ff",
+                      border: "1px solid #b3d7ff",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                    }}
+                  >
+                    <span style={{ color: "#555" }}>📄 {file.filename}</span>
+                    <a
+                      href={file.downloadUrl}
+                      download={file.filename}
+                      style={{
+                        padding: "4px 12px",
+                        backgroundColor: "#0070f3",
+                        color: "#fff",
+                        borderRadius: "6px",
+                        textDecoration: "none",
+                        fontSize: "13px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Download
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
-
-        {/* Download buttons for created files */}
-        {createdFiles.length > 0 && (
-          <div
-            style={{
-              alignSelf: "flex-start",
-              display: "flex",
-              flexDirection: "column",
-              gap: "6px",
-            }}
-          >
-            {createdFiles.map((file) => (
-              <div
-                key={file.downloadUrl}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "10px",
-                  padding: "8px 12px",
-                  backgroundColor: "#f0f7ff",
-                  border: "1px solid #b3d7ff",
-                  borderRadius: "8px",
-                  fontSize: "14px",
-                }}
-              >
-                <span style={{ color: "#555" }}>{file.filename}</span>
-                <a
-                  href={file.downloadUrl}
-                  download={file.filename}
-                  style={{
-                    padding: "4px 12px",
-                    backgroundColor: "#0070f3",
-                    color: "#fff",
-                    borderRadius: "6px",
-                    textDecoration: "none",
-                    fontSize: "13px",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Download
-                </a>
-              </div>
-            ))}
-          </div>
-        )}
 
         <div ref={messagesEndRef} />
       </div>

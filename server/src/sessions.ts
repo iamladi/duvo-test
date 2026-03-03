@@ -76,6 +76,15 @@ function resetTTL(session: Session): void {
   );
 }
 
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant with access to web search and file tools.
+
+When a task requires saving data to a file:
+- Use the Write tool to create the file in the current directory with a relative path (e.g. "results.csv", not "/absolute/path/results.csv")
+- Do NOT include the file contents in your message — just confirm what you saved and the filename
+- After saving, reply with a brief summary: what you found and where you saved it
+
+For CSV files, always include a header row.`;
+
 export function createSession(prompt: string, systemPrompt?: string): Session {
   const id = crypto.randomUUID();
   const ac = new AbortController();
@@ -113,7 +122,7 @@ export function createSession(prompt: string, systemPrompt?: string): Session {
         }
         return { behavior: "allow" as const, updatedPermissions: [] };
       },
-      ...(systemPrompt ? { systemPrompt } : {}),
+      systemPrompt: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
       // Clear CLAUDECODE env var to allow subprocess when running inside Claude Code
       env: { ...process.env, CLAUDECODE: undefined },
     },
