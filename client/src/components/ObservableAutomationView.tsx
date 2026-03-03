@@ -92,8 +92,10 @@ export function ObservableAutomationView() {
 						borderTop: "1px solid #e5e7eb",
 						display: "flex",
 						gap: "16px",
+						alignItems: "center",
 						backgroundColor: "#f9fafb",
 						flexShrink: 0,
+						flexWrap: "wrap",
 					}}
 				>
 					<span>Cost: {formatCost(state.lastResult.totalCostUsd)}</span>
@@ -101,8 +103,90 @@ export function ObservableAutomationView() {
 					<span>Out: {state.lastResult.usage.outputTokens.toLocaleString()} tokens</span>
 					<span>Time: {(state.lastResult.durationMs / 1000).toFixed(1)}s</span>
 					<span>Turns: {state.lastResult.numTurns}</span>
+					{state.evaluationStatus === "pending" && (
+						<span
+							style={{
+								display: "inline-flex",
+								alignItems: "center",
+								gap: "5px",
+								padding: "2px 8px",
+								borderRadius: "12px",
+								backgroundColor: "#f3f4f6",
+								border: "1px solid #d1d5db",
+								color: "#6b7280",
+								fontSize: "11px",
+							}}
+						>
+							<span
+								style={{
+									display: "inline-block",
+									width: "8px",
+									height: "8px",
+									borderRadius: "50%",
+									border: "2px solid #9ca3af",
+									borderTopColor: "transparent",
+									animation: "spin 0.8s linear infinite",
+								}}
+							/>
+							Evaluating…
+						</span>
+					)}
+					{state.evaluationStatus === "complete" &&
+						state.lastEvaluation?.status === "ok" && (
+							<span
+								style={{
+									display: "inline-flex",
+									alignItems: "center",
+									gap: "5px",
+									padding: "2px 8px",
+									borderRadius: "12px",
+									backgroundColor: state.lastEvaluation.passed
+										? "#f0fdf4"
+										: "#fef2f2",
+									border: `1px solid ${state.lastEvaluation.passed ? "#86efac" : "#fca5a5"}`,
+									color: state.lastEvaluation.passed ? "#16a34a" : "#dc2626",
+									fontSize: "11px",
+									maxWidth: "400px",
+								}}
+								title={state.lastEvaluation.reasoning}
+							>
+								<strong>{state.lastEvaluation.passed ? "Pass" : "Fail"}</strong>
+								<span style={{ color: "#9ca3af" }}>·</span>
+								<span>{Math.round(state.lastEvaluation.confidence * 100)}%</span>
+								<span style={{ color: "#9ca3af" }}>·</span>
+								<span
+									style={{
+										overflow: "hidden",
+										textOverflow: "ellipsis",
+										whiteSpace: "nowrap",
+									}}
+								>
+									{state.lastEvaluation.reasoning}
+								</span>
+							</span>
+						)}
+					{(state.evaluationStatus === "error" ||
+						(state.evaluationStatus === "complete" &&
+							state.lastEvaluation?.status === "error")) && (
+						<span
+							style={{
+								display: "inline-flex",
+								alignItems: "center",
+								gap: "5px",
+								padding: "2px 8px",
+								borderRadius: "12px",
+								backgroundColor: "#f3f4f6",
+								border: "1px solid #d1d5db",
+								color: "#9ca3af",
+								fontSize: "11px",
+							}}
+						>
+							Evaluation unavailable
+						</span>
+					)}
 				</div>
 			)}
+			<style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
 			{/* Created files */}
 			{state.createdFiles.length > 0 && (

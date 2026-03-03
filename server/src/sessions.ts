@@ -3,6 +3,7 @@ import {
   query as sdkQuery,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { EvaluationResult } from "shared";
 import { mkdirSync } from "fs";
 import { basename, isAbsolute, join, resolve } from "path";
 
@@ -52,6 +53,9 @@ export type Session = {
   streaming: boolean;
   ttlTimer: ReturnType<typeof setTimeout>;
   sessionDir: string;
+  originalPrompt: string;
+  currentPrompt: string;
+  lastEvaluation?: EvaluationResult;
 };
 
 const sessions = new Map<string, Session>();
@@ -206,6 +210,8 @@ export function createSession(
     queue,
     streaming: false,
     sessionDir,
+    originalPrompt: prompt,
+    currentPrompt: prompt,
     ttlTimer: setTimeout(() => deleteSession(id), SESSION_TTL_MS),
   };
   sessions.set(id, session);
@@ -218,6 +224,7 @@ export function getSession(id: string): Session | undefined {
 
 export function feedFollowUp(session: Session, prompt: string): void {
   resetTTL(session);
+  session.currentPrompt = prompt;
   // Enqueue into the same queue — the SDK's for-await loop picks it up
   session.queue.enqueue(makeUserMessage(prompt, session.sdkSessionId));
 }

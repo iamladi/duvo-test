@@ -23,6 +23,8 @@ const initialState: AgentViewState = {
 		tools: [],
 	},
 	lastResult: null,
+	lastEvaluation: null,
+	evaluationStatus: "idle",
 	error: null,
 	rawEvents: [],
 	createdFiles: [],
@@ -132,6 +134,8 @@ export function agentViewReducer(
 				automation: "initiating",
 				error: null,
 				lastResult: null,
+				lastEvaluation: null,
+				evaluationStatus: "idle",
 				conversation: {
 					...state.conversation,
 					turns: [...state.conversation.turns, userTurn],
@@ -256,10 +260,21 @@ export function agentViewReducer(
 				automation:
 					action.result.subtype === "success" ? "complete" : "error",
 				lastResult: action.result,
+				// Only mark pending if evaluation hasn't already arrived (evaluation SSE precedes result SSE)
+				evaluationStatus:
+					state.evaluationStatus === "idle" ? "pending" : state.evaluationStatus,
 				error:
 					action.result.subtype !== "success"
 						? { message: `Agent ended with: ${action.result.subtype}` }
 						: null,
+			};
+
+		case "EVALUATION":
+			return {
+				...state,
+				lastEvaluation: action.evaluation,
+				evaluationStatus:
+					action.evaluation.status === "error" ? "error" : "complete",
 			};
 
 		case "ERROR":
@@ -417,6 +432,9 @@ function handleSSEEvent(
 				turnId: event.data.turnId,
 				stopReason: event.data.stopReason,
 			});
+			break;
+		case "evaluation":
+			dispatch({ type: "EVALUATION", evaluation: event.data });
 			break;
 		case "result":
 			dispatch({ type: "RESULT", result: event.data });
