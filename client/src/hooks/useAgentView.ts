@@ -25,6 +25,7 @@ const initialState: AgentViewState = {
 	lastResult: null,
 	error: null,
 	rawEvents: [],
+	createdFiles: [],
 	connection: {
 		isConnected: false,
 		lastEventAt: null,
@@ -289,6 +290,17 @@ export function agentViewReducer(
 			};
 		}
 
+		case "FILE_CREATED": {
+			const exists = state.createdFiles.some(
+				(f) => f.downloadUrl === action.file.downloadUrl,
+			);
+			if (exists) return state;
+			return {
+				...state,
+				createdFiles: [...state.createdFiles, action.file],
+			};
+		}
+
 		default:
 			return state;
 	}
@@ -534,9 +546,6 @@ export function useAgentView(): UseAgentViewReturn {
 								continue;
 							}
 
-							// Skip file_created events (handled separately if needed)
-							if (eventType === "file_created") continue;
-
 							let parsed: unknown;
 							try {
 								parsed = JSON.parse(dataLine);
@@ -546,6 +555,24 @@ export function useAgentView(): UseAgentViewReturn {
 							}
 
 							if (mountedRef.current) {
+								// Handle file_created events (outside StepTracker protocol)
+								if (eventType === "file_created") {
+									const fileData = parsed as {
+										filename?: string;
+										downloadUrl?: string;
+									};
+									if (fileData.filename && fileData.downloadUrl) {
+										dispatch({
+											type: "FILE_CREATED",
+											file: {
+												filename: fileData.filename,
+												downloadUrl: fileData.downloadUrl,
+											},
+										});
+									}
+									continue;
+								}
+
 								const sseEvent = {
 									event: eventType,
 									data: parsed,

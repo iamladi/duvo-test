@@ -95,6 +95,49 @@ export function ObservableAutomationView() {
 				</div>
 			)}
 
+			{/* Created files */}
+			{state.createdFiles.length > 0 && (
+				<div
+					style={{
+						padding: "8px 16px",
+						borderTop: "1px solid #e5e7eb",
+						display: "flex",
+						flexDirection: "column",
+						gap: "6px",
+						backgroundColor: "#f0f7ff",
+						flexShrink: 0,
+					}}
+				>
+					{state.createdFiles.map((file) => (
+						<div
+							key={file.downloadUrl}
+							style={{
+								display: "flex",
+								alignItems: "center",
+								gap: "10px",
+								fontSize: "13px",
+							}}
+						>
+							<span style={{ color: "#374151" }}>{file.filename}</span>
+							<a
+								href={file.downloadUrl}
+								download={file.filename}
+								style={{
+									padding: "3px 10px",
+									backgroundColor: "#3b82f6",
+									color: "#fff",
+									borderRadius: "4px",
+									textDecoration: "none",
+									fontSize: "12px",
+								}}
+							>
+								Download
+							</a>
+						</div>
+					))}
+				</div>
+			)}
+
 			{/* Error display */}
 			{state.error && (
 				<div

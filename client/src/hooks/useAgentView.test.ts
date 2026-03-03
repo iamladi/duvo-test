@@ -13,6 +13,7 @@ const initialState: AgentViewState = {
 	lastResult: null,
 	error: null,
 	rawEvents: [],
+	createdFiles: [],
 	connection: {
 		isConnected: false,
 		lastEventAt: null,

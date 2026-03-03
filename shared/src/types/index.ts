@@ -280,12 +280,18 @@ export interface RawEvent {
 	payload: unknown;
 }
 
+export interface CreatedFile {
+	filename: string;
+	downloadUrl: string;
+}
+
 export interface AgentViewState {
 	automation: AutomationState;
 	conversation: Conversation;
 	lastResult: TurnResult | null;
 	error: { message: string; code?: string } | null;
 	rawEvents: RawEvent[];
+	createdFiles: CreatedFile[];
 	connection: {
 		isConnected: boolean;
 		lastEventAt: number | null;
@@ -310,4 +316,5 @@ export type StateAction =
 	| { type: "STEP_ERROR"; stepId: StepId; error: string }
 	| { type: "RESULT"; result: TurnResult }
 	| { type: "ERROR"; message: string; code?: string }
-	| { type: "RAW_EVENT"; event: RawEvent };
+	| { type: "RAW_EVENT"; event: RawEvent }
+	| { type: "FILE_CREATED"; file: CreatedFile };
