@@ -1,0 +1,13 @@
+{
+  "name": "duvo-test",
+  "private": true,
+  "workspaces": ["client", "server", "shared"],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build"
+  },
+  "packageManager": "bun@1.2.23",
+  "devDependencies": {
+    "turbo": "^2"
+  }
+}
