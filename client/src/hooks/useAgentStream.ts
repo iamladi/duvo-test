@@ -243,13 +243,6 @@ export function useAgentStream(): UseAgentStreamReturn {
                   break;
                 }
 
-                case "tool_result": {
-                  if (mountedRef.current) {
-                    setActiveToolName(null);
-                  }
-                  break;
-                }
-
                 case "file_created": {
                   if (
                     typeof parsed.filename === "string" &&

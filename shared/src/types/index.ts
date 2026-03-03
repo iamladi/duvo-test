@@ -41,5 +41,4 @@ export type AgentSSEEvent =
   | { type: "error"; message: string }
   | { type: "tool_progress"; tool_use_id: string; tool_name: string; elapsed_time_seconds: number }
   | { type: "tool_use_summary"; summary: string }
-  | { type: "tool_result"; parent_tool_use_id: string | null; success: boolean }
   | { type: "file_created"; filename: string; downloadUrl: string };

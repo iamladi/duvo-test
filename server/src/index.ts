@@ -1,18 +1,18 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { basename, join, resolve } from "path";
+import { readdirSync } from "fs";
+import { join, resolve } from "path";
 import type { AgentRequest } from "shared";
 import {
   createSession,
   deleteSession,
   feedFollowUp,
   getSession,
+  SESSION_BASE,
   type Session,
 } from "./sessions";
 
 const app = new Hono();
-
-const SESSION_BASE = "/tmp/duvo-sessions";
 
 const FORWARDED_TYPES = new Set([
   "system",
@@ -81,6 +81,29 @@ app.post("/api/agent", async (c) => {
             session.sdkSessionId = msg.session_id;
           }
 
+          // Detect file persistence via SDKFilesPersistedEvent
+          // type: "system", subtype: "files_persisted"
+          if (
+            msg.type === "system" &&
+            "subtype" in msg &&
+            msg.subtype === "files_persisted" &&
+            "files" in msg &&
+            Array.isArray(msg.files)
+          ) {
+            for (const file of msg.files as Array<{ filename: string }>) {
+              if (file.filename) {
+                await stream.writeSSE({
+                  event: "file_created",
+                  data: JSON.stringify({
+                    type: "file_created",
+                    filename: file.filename,
+                    downloadUrl: `/api/files/${session.id}/${file.filename}`,
+                  }),
+                });
+              }
+            }
+          }
+
           // Forward relevant event types to client
           if (FORWARDED_TYPES.has(msg.type)) {
             const clientMsg = { ...msg, session_id: session.id };
@@ -90,36 +113,23 @@ app.post("/api/agent", async (c) => {
             });
           }
 
-          // Handle synthetic user messages (tool results)
-          if (msg.type === "user" && "isSynthetic" in msg && msg.isSynthetic) {
-            const result = (("tool_use_result" in msg && msg.tool_use_result) || {}) as Record<string, unknown>;
-
-            // Detect file creation from FileWriteOutput
-            if (result.filePath && (result.type === "create" || result.type === "update")) {
-              const filename = basename(result.filePath as string);
-              await stream.writeSSE({
-                event: "file_created",
-                data: JSON.stringify({
-                  type: "file_created",
-                  filename,
-                  downloadUrl: `/api/files/${session.id}/${filename}`,
-                }),
-              });
-            }
-
-            // Always forward sanitized tool result (omit full file content for bandwidth)
-            await stream.writeSSE({
-              event: "tool_result",
-              data: JSON.stringify({
-                type: "tool_result",
-                parent_tool_use_id: (msg as Record<string, unknown>).parent_tool_use_id ?? null,
-                success: !result.error,
-              }),
-            });
-          }
-
-          // Stop iterating after result — keep query alive for follow-ups
+          // After result: scan session directory for any created files and emit file_created
           if (msg.type === "result") {
+            try {
+              const files = readdirSync(session.sessionDir);
+              for (const filename of files) {
+                await stream.writeSSE({
+                  event: "file_created",
+                  data: JSON.stringify({
+                    type: "file_created",
+                    filename,
+                    downloadUrl: `/api/files/${session.id}/${filename}`,
+                  }),
+                });
+              }
+            } catch {
+              // Session dir may not exist or be empty — not an error
+            }
             break;
           }
         }
