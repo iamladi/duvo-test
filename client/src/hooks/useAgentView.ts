@@ -431,10 +431,15 @@ function handleSSEEvent(
 	}
 }
 
+export type McpConnectionConfig = {
+	enabled: boolean;
+	path: string;
+};
+
 export type UseAgentViewReturn = {
 	state: AgentViewState;
 	summary: AutomationSummary;
-	sendMessage: (prompt: string, isRetry?: boolean) => void;
+	sendMessage: (prompt: string, isRetry?: boolean, mcpConnection?: McpConnectionConfig) => void;
 	abort: () => void;
 };
 
@@ -467,7 +472,7 @@ export function useAgentView(): UseAgentViewReturn {
 	}, []);
 
 	const sendMessage = useCallback(
-		(prompt: string, isRetry = false) => {
+		(prompt: string, isRetry = false, mcpConnection?: McpConnectionConfig) => {
 			abortControllerRef.current?.abort();
 
 			if (!isRetry) {
@@ -482,6 +487,7 @@ export function useAgentView(): UseAgentViewReturn {
 			const body: AgentRequest = {
 				prompt,
 				sessionId: state.conversation.sessionId ?? undefined,
+				...(mcpConnection ? { mcpConnection } : {}),
 			};
 
 			(async () => {

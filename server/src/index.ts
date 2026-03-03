@@ -107,7 +107,7 @@ app.post("/api/agent", async (c) => {
 		session = existing;
 		isFollowUp = true;
 	} else {
-		session = createSession(body.prompt, body.systemPrompt);
+		session = createSession(body.prompt, body.systemPrompt, body.mcpConnection);
 	}
 
 	session.streaming = true;

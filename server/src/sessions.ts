@@ -4,7 +4,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { mkdirSync } from "fs";
-import { basename, isAbsolute, join } from "path";
+import { basename, isAbsolute, join, resolve } from "path";
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 export const SESSION_BASE = "/tmp/duvo-sessions";
@@ -83,9 +83,48 @@ When a task requires saving data to a file:
 - Do NOT include the file contents in your message — just confirm what you saved and the filename
 - After saving, reply with a brief summary: what you found and where you saved it
 
-For CSV files, always include a header row.`;
+For CSV files, always include a header row.
 
-export function createSession(prompt: string, systemPrompt?: string): Session {
+IMPORTANT security rules for Bash:
+- NEVER read files outside your working directory using Bash
+- NEVER access ~/.claude, ~/.config, or any dotfiles/config directories
+- NEVER attempt to discover or list MCP configurations on the host system
+- Only use Bash for tasks the user explicitly requests`;
+
+function buildSystemPrompt(base: string, mcpPath?: string): string {
+  if (!mcpPath) return base;
+  const resolvedPath = resolve(mcpPath);
+  return `${base}
+
+## Connected Data Source: Filesystem MCP
+
+You have a filesystem data connection to: ${resolvedPath}
+Use your mcp__filesystem__* tools to interact with this data:
+- mcp__filesystem__list_directory — list files in a directory
+- mcp__filesystem__read_text_file — read a single file
+- mcp__filesystem__read_multiple_files — read multiple files at once
+- mcp__filesystem__directory_tree — see the full directory tree
+- mcp__filesystem__search_files — search for files by pattern
+- mcp__filesystem__get_file_info — get file metadata
+
+ALWAYS prefer these MCP tools over Bash/Read for accessing the connected directory.
+These tools are sandboxed to the connected directory — they cannot access files outside it.`;
+}
+
+const MCP_FILESYSTEM_TOOLS = [
+  "mcp__filesystem__read_text_file",
+  "mcp__filesystem__read_multiple_files",
+  "mcp__filesystem__list_directory",
+  "mcp__filesystem__directory_tree",
+  "mcp__filesystem__search_files",
+  "mcp__filesystem__get_file_info",
+];
+
+export function createSession(
+  prompt: string,
+  systemPrompt?: string,
+  mcpConnection?: { enabled: boolean; path: string },
+): Session {
   const id = crypto.randomUUID();
   const ac = new AbortController();
   const queue = new MessageQueue();
@@ -97,17 +136,34 @@ export function createSession(prompt: string, systemPrompt?: string): Session {
   // Enqueue first message — the SDK's streamInput for-await loop will read it immediately
   queue.enqueue(makeUserMessage(prompt, ""));
 
+  const baseTools = ["WebSearch", "WebFetch", "Write", "Bash", "Read"];
+  const mcpActive = mcpConnection?.enabled && mcpConnection.path.trim().length > 0;
+  const allowedTools = mcpActive
+    ? [...baseTools, ...MCP_FILESYSTEM_TOOLS]
+    : baseTools;
+
+  const mcpServers =
+    mcpActive
+      ? {
+          filesystem: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-filesystem", resolve(mcpConnection.path)],
+          },
+        }
+      : undefined;
+
   const q = sdkQuery({
     prompt: queue,
     options: {
       model: "claude-sonnet-4-6",
-      allowedTools: ["WebSearch", "WebFetch", "Write", "Bash", "Read"],
+      allowedTools,
       maxTurns: 10,
       cwd: sessionDir,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
       abortController: ac,
+      ...(mcpServers ? { mcpServers } : {}),
       // Redirect Write tool absolute paths into the session directory
       canUseTool: async (toolName, input) => {
         if (toolName === "Write") {
@@ -120,9 +176,24 @@ export function createSession(prompt: string, systemPrompt?: string): Session {
             };
           }
         }
+        // Block Bash/Read from accessing sensitive paths
+        if (toolName === "Bash") {
+          const cmd = (input.command as string) ?? "";
+          const sensitive = [
+            "~/.claude", "$HOME/.claude", "/.claude/",
+            "~/.config", "$HOME/.config", "/.config/",
+            ".mcp.json", "mcp.json",
+          ];
+          if (sensitive.some((p) => cmd.includes(p))) {
+            return { behavior: "deny" as const, message: "Access to system configuration files is not allowed" };
+          }
+        }
         return { behavior: "allow" as const, updatedPermissions: [] };
       },
-      systemPrompt: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      systemPrompt: systemPrompt ?? buildSystemPrompt(
+        DEFAULT_SYSTEM_PROMPT,
+        mcpActive ? mcpConnection.path : undefined,
+      ),
       // Clear CLAUDECODE env var to allow subprocess when running inside Claude Code
       env: { ...process.env, CLAUDECODE: undefined },
     },

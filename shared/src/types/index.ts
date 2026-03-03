@@ -6,6 +6,10 @@ export type AgentRequest = {
 	prompt: string;
 	sessionId?: string;
 	systemPrompt?: string;
+	mcpConnection?: {
+		enabled: boolean;
+		path: string;
+	};
 };
 
 // ============================================================

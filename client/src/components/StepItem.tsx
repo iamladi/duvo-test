@@ -30,6 +30,12 @@ function StatusIcon({ status }: { status: Step["status"] }) {
 	}
 }
 
+function mcpServerName(toolName: string): string | null {
+	if (!toolName.startsWith("mcp__")) return null;
+	const parts = toolName.split("__");
+	return parts[1] ?? null;
+}
+
 function stepLabel(step: Step): string {
 	switch (step.type) {
 		case "thinking":
@@ -96,6 +102,8 @@ export function StepItem({ step }: { step: Step }) {
 		: content;
 	const duration =
 		step.endTime ? formatDuration(step.endTime - step.startTime) : "";
+	const mcpServer =
+		step.type === "tool_use" ? mcpServerName(step.toolName) : null;
 
 	return (
 		<Accordion.Item
@@ -123,6 +131,21 @@ export function StepItem({ step }: { step: Step }) {
 				>
 					<StatusIcon status={step.status} />
 					<span style={{ fontWeight: 500 }}>{stepLabel(step)}</span>
+					{mcpServer && (
+						<span
+							style={{
+								fontSize: "10px",
+								padding: "1px 6px",
+								borderRadius: "3px",
+								backgroundColor: "#dbeafe",
+								color: "#1d4ed8",
+								fontWeight: 600,
+								textTransform: "capitalize",
+							}}
+						>
+							{mcpServer}
+						</span>
+					)}
 					{duration && (
 						<span style={{ color: "#9ca3af", marginLeft: "auto" }}>
 							{duration}
