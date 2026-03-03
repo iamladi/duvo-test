@@ -90,7 +90,7 @@ export function createSession(prompt: string): Session {
       includePartialMessages: true,
       abortController: ac,
       // Clear CLAUDECODE env var to allow subprocess when running inside Claude Code
-      env: { CLAUDECODE: undefined },
+      env: { ...process.env, CLAUDECODE: undefined },
     },
   });
 

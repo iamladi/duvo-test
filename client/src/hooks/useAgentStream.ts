@@ -37,8 +37,8 @@ export function useAgentStream(): UseAgentStreamReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
 
-  // Cleanup on unmount
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       abortControllerRef.current?.abort();
@@ -243,7 +243,7 @@ export function useAgentStream(): UseAgentStreamReturn {
           if (err instanceof Error && err.name === "AbortError") {
             // User-initiated abort — not an error
           } else if (mountedRef.current) {
-            setError(err instanceof Error ? err.message : "Unknown error occurred");
+            setError(err instanceof Error ? err.message : "Unknown error");
           }
           if (mountedRef.current) {
             setIsStreaming(false);

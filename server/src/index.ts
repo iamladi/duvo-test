@@ -92,6 +92,7 @@ app.post("/api/agent", async (c) => {
           }
         }
       } catch (err) {
+        console.error("[POST /api/agent] error:", err);
         const message = err instanceof Error ? err.message : "Unknown error";
         try {
           await stream.writeSSE({

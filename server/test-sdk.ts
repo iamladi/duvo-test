@@ -10,7 +10,7 @@ const q = query({
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
-    env: { CLAUDECODE: undefined },
+    env: { ...process.env, CLAUDECODE: undefined },
   },
 });
 
