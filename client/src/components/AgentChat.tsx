@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAgentStream } from "../hooks/useAgentStream";
 
 export function AgentChat() {
-  const { messages, isStreaming, error, usage, sendMessage, abort } = useAgentStream();
+  const { messages, isStreaming, error, usage, activeToolName, createdFiles, sendMessage, abort } = useAgentStream();
   const [input, setInput] = useState("");
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -79,8 +79,71 @@ export function AgentChat() {
           </div>
         ))}
 
+        {/* Download buttons for created files */}
+        {createdFiles.length > 0 && (
+          <div
+            style={{
+              alignSelf: "flex-start",
+              display: "flex",
+              flexDirection: "column",
+              gap: "6px",
+            }}
+          >
+            {createdFiles.map((file) => (
+              <div
+                key={file.downloadUrl}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  padding: "8px 12px",
+                  backgroundColor: "#f0f7ff",
+                  border: "1px solid #b3d7ff",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                }}
+              >
+                <span style={{ color: "#555" }}>{file.filename}</span>
+                <a
+                  href={file.downloadUrl}
+                  download={file.filename}
+                  style={{
+                    padding: "4px 12px",
+                    backgroundColor: "#0070f3",
+                    color: "#fff",
+                    borderRadius: "6px",
+                    textDecoration: "none",
+                    fontSize: "13px",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Download
+                </a>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Tool status line */}
+      {activeToolName && (
+        <div
+          style={{
+            padding: "6px 16px",
+            fontSize: "13px",
+            color: "#666",
+            borderTop: "1px solid #eee",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⟳</span>
+          <span>Using {activeToolName}...</span>
+        </div>
+      )}
 
       {/* Usage display */}
       {usage && !isStreaming && (

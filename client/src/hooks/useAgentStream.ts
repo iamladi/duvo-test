@@ -14,11 +14,18 @@ export type Usage = {
   durationMs: number;
 };
 
+export type CreatedFile = {
+  filename: string;
+  downloadUrl: string;
+};
+
 type UseAgentStreamReturn = {
   messages: Message[];
   isStreaming: boolean;
   error: string | null;
   usage: Usage | null;
+  activeToolName: string | null;
+  createdFiles: CreatedFile[];
   sendMessage: (prompt: string, isRetry?: boolean) => void;
   abort: () => void;
 };
@@ -32,6 +39,8 @@ export function useAgentStream(): UseAgentStreamReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [activeToolName, setActiveToolName] = useState<string | null>(null);
+  const [createdFiles, setCreatedFiles] = useState<CreatedFile[]>([]);
 
   const sessionIdRef = useRef<string | undefined>(undefined);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -57,6 +66,7 @@ export function useAgentStream(): UseAgentStreamReturn {
 
       setError(null);
       setIsStreaming(true);
+      setActiveToolName(null);
 
       // On retry, remove the previous failed assistant message and don't add a duplicate user message
       if (isRetry) {
@@ -136,7 +146,10 @@ export function useAgentStream(): UseAgentStreamReturn {
 
               // Handle [DONE] sentinel
               if (dataLine === "[DONE]") {
-                if (mountedRef.current) setIsStreaming(false);
+                if (mountedRef.current) {
+                  setIsStreaming(false);
+                  setActiveToolName(null);
+                }
                 continue;
               }
 
@@ -160,8 +173,24 @@ export function useAgentStream(): UseAgentStreamReturn {
 
                 case "stream_event": {
                   const event = parsed.event as
-                    | { type: string; delta?: { type: string; text?: string } }
+                    | {
+                        type: string;
+                        content_block?: { type: string; name?: string };
+                        delta?: { type: string; text?: string };
+                      }
                     | undefined;
+
+                  // Detect tool use start immediately from content_block_start
+                  if (
+                    event?.type === "content_block_start" &&
+                    event.content_block?.type === "tool_use" &&
+                    event.content_block.name
+                  ) {
+                    if (mountedRef.current) {
+                      setActiveToolName(event.content_block.name);
+                    }
+                  }
+
                   if (
                     event?.type === "content_block_delta" &&
                     event.delta?.type === "text_delta" &&
@@ -207,6 +236,36 @@ export function useAgentStream(): UseAgentStreamReturn {
                   break;
                 }
 
+                case "tool_progress": {
+                  if (typeof parsed.tool_name === "string" && mountedRef.current) {
+                    setActiveToolName(parsed.tool_name);
+                  }
+                  break;
+                }
+
+                case "tool_result": {
+                  if (mountedRef.current) {
+                    setActiveToolName(null);
+                  }
+                  break;
+                }
+
+                case "file_created": {
+                  if (
+                    typeof parsed.filename === "string" &&
+                    typeof parsed.downloadUrl === "string" &&
+                    mountedRef.current
+                  ) {
+                    const url = parsed.downloadUrl as string;
+                    setCreatedFiles((prev) =>
+                      prev.some((f) => f.downloadUrl === url)
+                        ? prev
+                        : [...prev, { filename: parsed.filename as string, downloadUrl: url }],
+                    );
+                  }
+                  break;
+                }
+
                 case "result": {
                   const totalCost = typeof parsed.total_cost_usd === "number" ? parsed.total_cost_usd : 0;
                   const usageData = parsed.usage as
@@ -221,6 +280,7 @@ export function useAgentStream(): UseAgentStreamReturn {
                       durationMs: durationMs,
                     });
                     setIsStreaming(false);
+                    setActiveToolName(null);
                   }
                   break;
                 }
@@ -230,6 +290,7 @@ export function useAgentStream(): UseAgentStreamReturn {
                   if (mountedRef.current) {
                     setError(message);
                     setIsStreaming(false);
+                    setActiveToolName(null);
                   }
                   break;
                 }
@@ -247,6 +308,7 @@ export function useAgentStream(): UseAgentStreamReturn {
           }
           if (mountedRef.current) {
             setIsStreaming(false);
+            setActiveToolName(null);
           }
         }
       })();
@@ -254,5 +316,5 @@ export function useAgentStream(): UseAgentStreamReturn {
     [],
   );
 
-  return { messages, isStreaming, error, usage, sendMessage, abort };
+  return { messages, isStreaming, error, usage, activeToolName, createdFiles, sendMessage, abort };
 }

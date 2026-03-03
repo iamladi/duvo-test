@@ -1,6 +1,7 @@
 export type AgentRequest = {
   prompt: string;
   sessionId?: string;
+  systemPrompt?: string;
 };
 
 export type AgentSSEEvent =
@@ -9,12 +10,19 @@ export type AgentSSEEvent =
       type: "stream_event";
       event: {
         type: string;
-        delta?: { type: string; text?: string };
+        index?: number;
+        content_block?: { type: string; id?: string; name?: string; text?: string };
+        delta?: { type: string; text?: string; partial_json?: string };
       };
     }
   | {
       type: "assistant";
-      message: { content: Array<{ type: string; text?: string }> };
+      message: {
+        content: Array<
+          | { type: "text"; text: string }
+          | { type: "tool_use"; id: string; name: string; input: unknown }
+        >;
+      };
     }
   | {
       type: "result";
@@ -30,4 +38,8 @@ export type AgentSSEEvent =
         cache_read_input_tokens: number;
       };
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "tool_progress"; tool_use_id: string; tool_name: string; elapsed_time_seconds: number }
+  | { type: "tool_use_summary"; summary: string }
+  | { type: "tool_result"; parent_tool_use_id: string | null; success: boolean }
+  | { type: "file_created"; filename: string; downloadUrl: string };

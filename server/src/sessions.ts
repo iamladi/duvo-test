@@ -3,8 +3,11 @@ import {
   query as sdkQuery,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { mkdirSync } from "fs";
+import { join } from "path";
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const SESSION_BASE = "/tmp/duvo-sessions";
 
 /**
  * Queue-based async iterable that keeps the SDK's streamInput for-await loop
@@ -72,10 +75,14 @@ function resetTTL(session: Session): void {
   );
 }
 
-export function createSession(prompt: string): Session {
+export function createSession(prompt: string, systemPrompt?: string): Session {
   const id = crypto.randomUUID();
   const ac = new AbortController();
   const queue = new MessageQueue();
+
+  // Create per-session output directory
+  const sessionDir = join(SESSION_BASE, id);
+  mkdirSync(sessionDir, { recursive: true });
 
   // Enqueue first message — the SDK's streamInput for-await loop will read it immediately
   queue.enqueue(makeUserMessage(prompt, ""));
@@ -84,11 +91,14 @@ export function createSession(prompt: string): Session {
     prompt: queue,
     options: {
       model: "claude-sonnet-4-6",
-      allowedTools: [],
+      allowedTools: ["WebSearch", "WebFetch", "Write", "Bash", "Read"],
+      maxTurns: 10,
+      cwd: sessionDir,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
       abortController: ac,
+      ...(systemPrompt ? { systemPrompt } : {}),
       // Clear CLAUDECODE env var to allow subprocess when running inside Claude Code
       env: { ...process.env, CLAUDECODE: undefined },
     },
