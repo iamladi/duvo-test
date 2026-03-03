@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from "react";
-import type { AgentRequest, AgentSSEEvent } from "shared";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { AgentRequest } from "shared";
 
 export type Message = {
+  id: string;
   role: "user" | "assistant";
   content: string;
 };
@@ -18,9 +19,13 @@ type UseAgentStreamReturn = {
   isStreaming: boolean;
   error: string | null;
   usage: Usage | null;
-  sendMessage: (prompt: string) => void;
+  sendMessage: (prompt: string, isRetry?: boolean) => void;
   abort: () => void;
 };
+
+function makeMessage(role: "user" | "assistant", content: string): Message {
+  return { id: crypto.randomUUID(), role, content };
+}
 
 export function useAgentStream(): UseAgentStreamReturn {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -30,182 +35,224 @@ export function useAgentStream(): UseAgentStreamReturn {
 
   const sessionIdRef = useRef<string | undefined>(undefined);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const abort = useCallback(() => {
     abortControllerRef.current?.abort();
-    setIsStreaming(false);
+    // isStreaming will be set to false by the catch block when AbortError fires
   }, []);
 
-  const sendMessage = useCallback((prompt: string) => {
-    setError(null);
-    setIsStreaming(true);
+  const sendMessage = useCallback(
+    (prompt: string, isRetry = false) => {
+      // Abort any in-flight request before starting a new one
+      abortControllerRef.current?.abort();
 
-    // Add user message immediately
-    setMessages((prev) => [...prev, { role: "user", content: prompt }]);
+      setError(null);
+      setIsStreaming(true);
 
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    const body: AgentRequest = {
-      prompt,
-      sessionId: sessionIdRef.current,
-    };
-
-    (async () => {
-      try {
-        const response = await fetch("/api/agent", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
+      // On retry, remove the previous failed assistant message and don't add a duplicate user message
+      if (isRetry) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          // Remove trailing empty/failed assistant message if present
+          const last = updated[updated.length - 1];
+          if (last && last.role === "assistant") {
+            updated.pop();
+          }
+          return updated;
         });
+      } else {
+        setMessages((prev) => [...prev, makeMessage("user", prompt)]);
+      }
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
-        if (!response.body) {
-          throw new Error("Response body is null");
-        }
+      const body: AgentRequest = {
+        prompt,
+        sessionId: sessionIdRef.current,
+      };
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
+      (async () => {
+        try {
+          const response = await fetch("/api/agent", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
 
-        // Add a placeholder assistant message to stream into
-        setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+          if (!response.body) {
+            throw new Error("Response body is null");
+          }
 
-          buffer += decoder.decode(value, { stream: true });
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-          // Split on double newline to extract complete SSE events
-          const parts = buffer.split("\n\n");
-          // The last part may be incomplete — keep it in the buffer
-          buffer = parts.pop() ?? "";
+          // Add a placeholder assistant message to stream into
+          if (mountedRef.current) {
+            setMessages((prev) => [...prev, makeMessage("assistant", "")]);
+          }
 
-          for (const part of parts) {
-            if (!part.trim()) continue;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!mountedRef.current) break;
 
-            let eventType = "";
-            let dataLine = "";
+            buffer += decoder.decode(value, { stream: true });
 
-            for (const line of part.split("\n")) {
-              if (line.startsWith("event: ")) {
-                eventType = line.slice("event: ".length).trim();
-              } else if (line.startsWith("data: ")) {
-                dataLine = line.slice("data: ".length).trim();
-              }
-            }
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop() ?? "";
 
-            if (!dataLine) continue;
+            for (const part of parts) {
+              if (!part.trim()) continue;
 
-            // Handle [DONE] sentinel
-            if (dataLine === "[DONE]") {
-              setIsStreaming(false);
-              continue;
-            }
+              let eventType = "";
+              let dataLine = "";
 
-            let parsed: AgentSSEEvent;
-            try {
-              parsed = JSON.parse(dataLine) as AgentSSEEvent;
-            } catch {
-              continue;
-            }
-
-            // Prefer event type from the SSE event: line; fall back to parsed type
-            const resolvedType = eventType || parsed.type;
-
-            switch (resolvedType) {
-              case "system": {
-                const evt = parsed as Extract<AgentSSEEvent, { type: "system" }>;
-                if (evt.subtype === "init") {
-                  sessionIdRef.current = evt.session_id;
+              for (const line of part.split("\n")) {
+                if (line.startsWith("event: ")) {
+                  eventType = line.slice("event: ".length).trim();
+                } else if (line.startsWith("data: ")) {
+                  // Accumulate multi-line data per SSE spec
+                  dataLine += (dataLine ? "\n" : "") + line.slice("data: ".length);
                 }
-                break;
               }
 
-              case "stream_event": {
-                const evt = parsed as Extract<AgentSSEEvent, { type: "stream_event" }>;
-                if (
-                  evt.event.type === "content_block_delta" &&
-                  evt.event.delta?.type === "text_delta" &&
-                  evt.event.delta.text
-                ) {
-                  const text = evt.event.delta.text;
-                  setMessages((prev) => {
-                    const updated = [...prev];
-                    const last = updated[updated.length - 1];
-                    if (last && last.role === "assistant") {
-                      updated[updated.length - 1] = {
-                        ...last,
-                        content: last.content + text,
-                      };
+              if (!dataLine) continue;
+
+              // Handle [DONE] sentinel
+              if (dataLine === "[DONE]") {
+                if (mountedRef.current) setIsStreaming(false);
+                continue;
+              }
+
+              let parsed: Record<string, unknown>;
+              try {
+                parsed = JSON.parse(dataLine);
+              } catch {
+                console.error("Failed to parse SSE data:", dataLine);
+                continue;
+              }
+
+              const resolvedType = eventType || parsed.type;
+
+              switch (resolvedType) {
+                case "system": {
+                  if (parsed.subtype === "init" && typeof parsed.session_id === "string") {
+                    sessionIdRef.current = parsed.session_id;
+                  }
+                  break;
+                }
+
+                case "stream_event": {
+                  const event = parsed.event as
+                    | { type: string; delta?: { type: string; text?: string } }
+                    | undefined;
+                  if (
+                    event?.type === "content_block_delta" &&
+                    event.delta?.type === "text_delta" &&
+                    event.delta.text
+                  ) {
+                    const text = event.delta.text;
+                    if (mountedRef.current) {
+                      setMessages((prev) => {
+                        const updated = [...prev];
+                        const last = updated[updated.length - 1];
+                        if (last?.role === "assistant") {
+                          updated[updated.length - 1] = {
+                            ...last,
+                            content: last.content + text,
+                          };
+                        }
+                        return updated;
+                      });
                     }
-                    return updated;
-                  });
+                  }
+                  break;
                 }
-                break;
-              }
 
-              case "assistant": {
-                const evt = parsed as Extract<AgentSSEEvent, { type: "assistant" }>;
-                const textContent = evt.message.content
-                  .filter((c) => c.type === "text" && c.text)
-                  .map((c) => c.text ?? "")
-                  .join("");
-                if (textContent) {
-                  setMessages((prev) => {
-                    const updated = [...prev];
-                    const last = updated[updated.length - 1];
-                    if (last && last.role === "assistant") {
-                      updated[updated.length - 1] = {
-                        ...last,
-                        content: textContent,
-                      };
-                    }
-                    return updated;
-                  });
+                case "assistant": {
+                  const message = parsed.message as
+                    | { content: Array<{ type: string; text?: string }> }
+                    | undefined;
+                  if (!message?.content) break;
+                  const textContent = message.content
+                    .filter((c) => c.type === "text" && c.text)
+                    .map((c) => c.text ?? "")
+                    .join("");
+                  if (textContent && mountedRef.current) {
+                    setMessages((prev) => {
+                      const updated = [...prev];
+                      const last = updated[updated.length - 1];
+                      if (last?.role === "assistant") {
+                        updated[updated.length - 1] = { ...last, content: textContent };
+                      }
+                      return updated;
+                    });
+                  }
+                  break;
                 }
-                break;
-              }
 
-              case "result": {
-                const evt = parsed as Extract<AgentSSEEvent, { type: "result" }>;
-                setUsage({
-                  totalCostUsd: evt.total_cost_usd,
-                  inputTokens: evt.usage.input_tokens,
-                  outputTokens: evt.usage.output_tokens,
-                  durationMs: evt.duration_ms,
-                });
-                setIsStreaming(false);
-                break;
-              }
+                case "result": {
+                  const totalCost = typeof parsed.total_cost_usd === "number" ? parsed.total_cost_usd : 0;
+                  const usageData = parsed.usage as
+                    | { input_tokens: number; output_tokens: number }
+                    | undefined;
+                  const durationMs = typeof parsed.duration_ms === "number" ? parsed.duration_ms : 0;
+                  if (mountedRef.current) {
+                    setUsage({
+                      totalCostUsd: totalCost,
+                      inputTokens: usageData?.input_tokens ?? 0,
+                      outputTokens: usageData?.output_tokens ?? 0,
+                      durationMs: durationMs,
+                    });
+                    setIsStreaming(false);
+                  }
+                  break;
+                }
 
-              case "error": {
-                const evt = parsed as Extract<AgentSSEEvent, { type: "error" }>;
-                setError(evt.message);
-                setIsStreaming(false);
-                break;
-              }
+                case "error": {
+                  const message = typeof parsed.message === "string" ? parsed.message : "Unknown error";
+                  if (mountedRef.current) {
+                    setError(message);
+                    setIsStreaming(false);
+                  }
+                  break;
+                }
 
-              default:
-                break;
+                default:
+                  break;
+              }
             }
           }
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") {
+            // User-initiated abort — not an error
+          } else if (mountedRef.current) {
+            setError(err instanceof Error ? err.message : "Unknown error occurred");
+          }
+          if (mountedRef.current) {
+            setIsStreaming(false);
+          }
         }
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          // User-initiated abort — not an error
-        } else {
-          setError(err instanceof Error ? err.message : "Unknown error occurred");
-        }
-        setIsStreaming(false);
-      }
-    })();
-  }, []);
+      })();
+    },
+    [],
+  );
 
   return { messages, isStreaming, error, usage, sendMessage, abort };
 }

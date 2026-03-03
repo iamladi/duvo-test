@@ -28,7 +28,7 @@ export function AgentChat() {
 
   function handleRetry() {
     if (lastPrompt) {
-      sendMessage(lastPrompt);
+      sendMessage(lastPrompt, true);
     }
   }
 
@@ -60,9 +60,9 @@ export function AgentChat() {
           </div>
         )}
 
-        {messages.map((msg, i) => (
+        {messages.map((msg) => (
           <div
-            key={i}
+            key={msg.id}
             style={{
               alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
               maxWidth: "70%",
