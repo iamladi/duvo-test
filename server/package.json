@@ -1,0 +1,17 @@
+{
+  "name": "server",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.2.63",
+    "hono": "^4",
+    "shared": "workspace:*",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
