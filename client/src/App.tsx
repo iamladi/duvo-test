@@ -1,5 +1,5 @@
-import { AgentChat } from "./components/AgentChat";
+import { ObservableAutomationView } from "./components/ObservableAutomationView";
 
 export function App() {
-  return <AgentChat />;
+	return <ObservableAutomationView />;
 }

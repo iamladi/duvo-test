@@ -2,212 +2,293 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { readdirSync } from "fs";
 import { join, resolve } from "path";
-import type { AgentRequest } from "shared";
+import type { AgentRequest, SSEEvent } from "shared";
+import { StepTracker } from "./step-tracker";
 import {
-  createSession,
-  deleteSession,
-  feedFollowUp,
-  getSession,
-  SESSION_BASE,
-  type Session,
+	createSession,
+	deleteSession,
+	feedFollowUp,
+	getSession,
+	SESSION_BASE,
+	type Session,
 } from "./sessions";
 
 const app = new Hono();
 
-const FORWARDED_TYPES = new Set([
-  "system",
-  "stream_event",
-  "assistant",
-  "result",
-  "tool_progress",
-  "tool_use_summary",
-]);
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [1000, 2000, 4000];
+
+function isTransientError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const msg = err.message.toLowerCase();
+	return (
+		msg.includes("internal server error") ||
+		msg.includes("overloaded") ||
+		msg.includes("econnreset") ||
+		msg.includes("econnrefused") ||
+		msg.includes("etimedout") ||
+		msg.includes("fetch failed")
+	);
+}
+
+function isAuthError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const msg = err.message.toLowerCase();
+	return msg.includes("401") || msg.includes("403") || msg.includes("unauthorized") || msg.includes("forbidden");
+}
+
+function isRateLimitError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.message.toLowerCase().includes("429") || err.message.toLowerCase().includes("rate limit");
+}
+
+async function nextWithRetry(
+	query: Session["query"],
+): Promise<IteratorResult<unknown>> {
+	let lastError: unknown;
+
+	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+		try {
+			return await query.next();
+		} catch (err) {
+			lastError = err;
+
+			if (isAuthError(err)) throw err;
+			if (!isTransientError(err) && !isRateLimitError(err)) throw err;
+
+			if (attempt < MAX_RETRIES) {
+				const delay = isRateLimitError(err)
+					? RETRY_DELAYS[attempt] * 2
+					: RETRY_DELAYS[attempt];
+				console.warn(
+					`[retry] attempt ${attempt + 1}/${MAX_RETRIES}, waiting ${delay}ms:`,
+					err instanceof Error ? err.message : err,
+				);
+				await new Promise((r) => setTimeout(r, delay));
+			}
+		}
+	}
+
+	throw lastError;
+}
+
+async function emitSSEEvent(
+	stream: { writeSSE: (msg: { event?: string; data: string }) => Promise<void> },
+	sseEvent: SSEEvent,
+): Promise<void> {
+	if (sseEvent.event === "done") {
+		await stream.writeSSE({ data: "[DONE]" });
+	} else {
+		await stream.writeSSE({
+			event: sseEvent.event,
+			data: JSON.stringify(sseEvent.data),
+		});
+	}
+}
 
 app.post("/api/agent", async (c) => {
-  // Parse body BEFORE entering streamSSE — body stream is consumed by the response
-  const body = await c.req.json<AgentRequest>();
+	const body = await c.req.json<AgentRequest>();
 
-  if (!body.prompt?.trim()) {
-    return c.json({ error: "prompt is required" }, 400);
-  }
+	if (!body.prompt?.trim()) {
+		return c.json({ error: "prompt is required" }, 400);
+	}
 
-  let session: Session;
-  let isFollowUp = false;
+	let session: Session;
+	let isFollowUp = false;
 
-  if (body.sessionId) {
-    const existing = getSession(body.sessionId);
-    if (!existing) {
-      return c.json({ error: "Session not found" }, 404);
-    }
-    if (existing.streaming) {
-      return c.json({ error: "Session is currently streaming" }, 409);
-    }
-    session = existing;
-    isFollowUp = true;
-  } else {
-    session = createSession(body.prompt, body.systemPrompt);
-  }
+	if (body.sessionId) {
+		const existing = getSession(body.sessionId);
+		if (!existing) {
+			return c.json({ error: "Session not found" }, 404);
+		}
+		if (existing.streaming) {
+			return c.json({ error: "Session is currently streaming" }, 409);
+		}
+		session = existing;
+		isFollowUp = true;
+	} else {
+		session = createSession(body.prompt, body.systemPrompt);
+	}
 
-  session.streaming = true;
+	session.streaming = true;
 
-  // For follow-ups, enqueue the message into the session's queue
-  if (isFollowUp) {
-    feedFollowUp(session, body.prompt);
-  }
+	if (isFollowUp) {
+		feedFollowUp(session, body.prompt);
+	}
 
-  let aborted = false;
+	let aborted = false;
+	const tracker = new StepTracker();
 
-  return streamSSE(
-    c,
-    async (stream) => {
-      stream.onAbort(() => {
-        aborted = true;
-        session.streaming = false;
-      });
+	return streamSSE(
+		c,
+		async (stream) => {
+			stream.onAbort(() => {
+				aborted = true;
+				session.streaming = false;
+			});
 
-      try {
-        // Use manual .next() instead of for-await to avoid closing the generator
-        while (true) {
-          if (aborted) break;
+			try {
+				while (true) {
+					if (aborted) break;
 
-          const { value: msg, done } = await session.query.next();
-          if (done) {
-            deleteSession(session.id);
-            break;
-          }
+					const { value: msg, done } = await nextWithRetry(session.query);
+					if (done) {
+						deleteSession(session.id);
+						break;
+					}
 
-          // Capture SDK session ID from init message
-          if (msg.type === "system" && "subtype" in msg && msg.subtype === "init") {
-            session.sdkSessionId = msg.session_id;
-          }
+					const sdkMessage = msg as Record<string, unknown>;
 
-          // Detect file persistence via SDKFilesPersistedEvent
-          // type: "system", subtype: "files_persisted"
-          if (
-            msg.type === "system" &&
-            "subtype" in msg &&
-            msg.subtype === "files_persisted" &&
-            "files" in msg &&
-            Array.isArray(msg.files)
-          ) {
-            for (const file of msg.files as Array<{ filename: string }>) {
-              if (file.filename) {
-                await stream.writeSSE({
-                  event: "file_created",
-                  data: JSON.stringify({
-                    type: "file_created",
-                    filename: file.filename,
-                    downloadUrl: `/api/files/${session.id}/${file.filename}`,
-                  }),
-                });
-              }
-            }
-          }
+					// Capture SDK session ID from init message
+					if (
+						sdkMessage.type === "system" &&
+						sdkMessage.subtype === "init"
+					) {
+						session.sdkSessionId = sdkMessage.session_id as string;
+					}
 
-          // Forward relevant event types to client
-          if (FORWARDED_TYPES.has(msg.type)) {
-            const clientMsg = { ...msg, session_id: session.id };
-            await stream.writeSSE({
-              event: msg.type,
-              data: JSON.stringify(clientMsg),
-            });
-          }
+					// Detect file persistence
+					if (
+						sdkMessage.type === "system" &&
+						sdkMessage.subtype === "files_persisted" &&
+						Array.isArray(sdkMessage.files)
+					) {
+						for (const file of sdkMessage.files as Array<{
+							filename: string;
+						}>) {
+							if (file.filename) {
+								await stream.writeSSE({
+									event: "file_created",
+									data: JSON.stringify({
+										type: "file_created",
+										filename: file.filename,
+										downloadUrl: `/api/files/${session.id}/${file.filename}`,
+									}),
+								});
+							}
+						}
+					}
 
-          // After result: scan session directory for any created files and emit file_created
-          if (msg.type === "result") {
-            try {
-              const files = readdirSync(session.sessionDir);
-              for (const filename of files) {
-                await stream.writeSSE({
-                  event: "file_created",
-                  data: JSON.stringify({
-                    type: "file_created",
-                    filename,
-                    downloadUrl: `/api/files/${session.id}/${filename}`,
-                  }),
-                });
-              }
-            } catch {
-              // Session dir may not exist or be empty — not an error
-            }
-            break;
-          }
-        }
-      } catch (err) {
-        console.error("[POST /api/agent] error:", err);
-        const message = err instanceof Error ? err.message : "Unknown error";
-        try {
-          await stream.writeSSE({
-            event: "error",
-            data: JSON.stringify({ type: "error", message }),
-          });
-        } catch {
-          // Stream may already be closed
-        }
-        deleteSession(session.id);
-      } finally {
-        session.streaming = false;
-        try {
-          await stream.writeSSE({ data: "[DONE]" });
-        } catch {
-          // Stream may already be closed
-        }
-      }
-    },
-    async (err) => {
-      console.error("SSE stream error:", err);
-    },
-  );
+					// Process through StepTracker for dual-layer events
+					const sseEvents = tracker.process(sdkMessage);
+					for (const sseEvent of sseEvents) {
+						// Override session:init sessionId with the server's session ID
+						// (StepTracker uses SDK session ID, clients need server ID for follow-ups)
+						if (sseEvent.event === "session:init") {
+							(sseEvent.data as { sessionId: string }).sessionId =
+								session.id;
+						}
+						try {
+							await emitSSEEvent(stream, sseEvent);
+						} catch {
+							// Stream may be closed
+							break;
+						}
+					}
+
+					// After result: scan session directory for created files
+					if (sdkMessage.type === "result") {
+						try {
+							const files = readdirSync(session.sessionDir);
+							for (const filename of files) {
+								await stream.writeSSE({
+									event: "file_created",
+									data: JSON.stringify({
+										type: "file_created",
+										filename,
+										downloadUrl: `/api/files/${session.id}/${filename}`,
+									}),
+								});
+							}
+						} catch {
+							// Session dir may not exist
+						}
+						// result event already emits done via StepTracker
+						break;
+					}
+				}
+			} catch (err) {
+				console.error("[POST /api/agent] error:", err);
+				const message = err instanceof Error ? err.message : "Unknown error";
+				const code = isAuthError(err)
+					? "auth_error"
+					: isRateLimitError(err)
+						? "rate_limit"
+						: "server_error";
+				try {
+					await emitSSEEvent(stream, {
+						event: "error",
+						data: { message, code, timestamp: Date.now() },
+					});
+					await emitSSEEvent(stream, { event: "done", data: "[DONE]" });
+				} catch {
+					// Stream may already be closed
+				}
+				deleteSession(session.id);
+			} finally {
+				session.streaming = false;
+				// done is emitted by StepTracker on result, or by error handler above
+				// Only emit done as fallback if we haven't already
+				try {
+					await stream.writeSSE({ data: "[DONE]" });
+				} catch {
+					// Already closed or done was already sent
+				}
+			}
+		},
+		async (err) => {
+			console.error("SSE stream error:", err);
+		},
+	);
 });
 
 app.get("/api/files/:sessionId/:filename", async (c) => {
-  const { sessionId, filename } = c.req.param();
+	const { sessionId, filename } = c.req.param();
 
-  // Path traversal prevention
-  if (
-    !sessionId ||
-    !filename ||
-    sessionId.includes("..") ||
-    filename.includes("..") ||
-    sessionId.includes("/") ||
-    filename.includes("/")
-  ) {
-    return c.json({ error: "Invalid path" }, 400);
-  }
+	if (
+		!sessionId ||
+		!filename ||
+		sessionId.includes("..") ||
+		filename.includes("..") ||
+		sessionId.includes("/") ||
+		filename.includes("/")
+	) {
+		return c.json({ error: "Invalid path" }, 400);
+	}
 
-  const filePath = resolve(join(SESSION_BASE, sessionId, filename));
-  const expectedBase = resolve(join(SESSION_BASE, sessionId));
+	const filePath = resolve(join(SESSION_BASE, sessionId, filename));
+	const expectedBase = resolve(join(SESSION_BASE, sessionId));
 
-  if (!filePath.startsWith(expectedBase + "/") && filePath !== expectedBase) {
-    return c.json({ error: "Access denied" }, 403);
-  }
+	if (!filePath.startsWith(`${expectedBase}/`) && filePath !== expectedBase) {
+		return c.json({ error: "Access denied" }, 403);
+	}
 
-  const file = Bun.file(filePath);
-  if (!(await file.exists())) {
-    return c.json({ error: "File not found" }, 404);
-  }
+	const file = Bun.file(filePath);
+	if (!(await file.exists())) {
+		return c.json({ error: "File not found" }, 404);
+	}
 
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const mimeTypes: Record<string, string> = {
-    csv: "text/csv",
-    txt: "text/plain",
-    json: "application/json",
-    md: "text/markdown",
-  };
+	const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+	const mimeTypes: Record<string, string> = {
+		csv: "text/csv",
+		txt: "text/plain",
+		json: "application/json",
+		md: "text/markdown",
+	};
 
-  return new Response(file.stream(), {
-    headers: {
-      "Content-Type": mimeTypes[ext] ?? "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Content-Length": String(file.size),
-    },
-  });
+	return new Response(file.stream(), {
+		headers: {
+			"Content-Type": mimeTypes[ext] ?? "application/octet-stream",
+			"Content-Disposition": `attachment; filename="${filename}"`,
+			"Content-Length": String(file.size),
+		},
+	});
 });
 
 app.get("/", (c) => c.text("duvo-test server"));
 
 export default {
-  port: 3001,
-  fetch: app.fetch,
-  idleTimeout: 0,
+	port: 3001,
+	fetch: app.fetch,
+	idleTimeout: 0,
 };
