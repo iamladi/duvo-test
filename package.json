@@ -4,7 +4,8 @@
   "workspaces": ["client", "server", "shared"],
   "scripts": {
     "dev": "turbo dev",
-    "build": "turbo build"
+    "build": "turbo build",
+    "test:e2e": "bun test e2e/step1.test.ts --timeout 30000"
   },
   "packageManager": "bun@1.2.23",
   "devDependencies": {
