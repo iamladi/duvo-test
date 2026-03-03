@@ -9,26 +9,35 @@ function formatCost(usd: number): string {
 	return `$${usd.toFixed(4)}`;
 }
 
+const DEFAULT_MCP_PATH = "demo-data";
+
 export function ObservableAutomationView() {
 	const { state, summary, sendMessage, abort } = useAgentView();
 	const [input, setInput] = useState("");
 	const lastPromptRef = useState<string | null>(null);
+	const [mcpEnabled, setMcpEnabled] = useState(false);
+	const [mcpPath, setMcpPath] = useState(DEFAULT_MCP_PATH);
 
 	const isStreaming =
 		state.automation === "streaming" || state.automation === "initiating";
+	const hasSession = state.conversation.sessionId !== null;
+
+	function getMcpConnection() {
+		return mcpEnabled ? { enabled: true, path: mcpPath } : undefined;
+	}
 
 	function handleSend() {
 		const prompt = input.trim();
 		if (!prompt || isStreaming) return;
 		lastPromptRef[1](prompt);
 		setInput("");
-		sendMessage(prompt);
+		sendMessage(prompt, false, getMcpConnection());
 	}
 
 	function handleRetry() {
 		const lastPrompt = lastPromptRef[0];
 		if (lastPrompt) {
-			sendMessage(lastPrompt, true);
+			sendMessage(lastPrompt, true, getMcpConnection());
 		}
 	}
 
@@ -178,6 +187,67 @@ export function ObservableAutomationView() {
 					</button>
 				</div>
 			)}
+
+			{/* MCP Connection card */}
+			<div
+				style={{
+					padding: "8px 16px",
+					borderTop: "1px solid #e5e7eb",
+					display: "flex",
+					gap: "10px",
+					alignItems: "center",
+					backgroundColor: mcpEnabled ? "#f0fdf4" : "#f9fafb",
+					flexShrink: 0,
+					fontSize: "13px",
+				}}
+			>
+				<span
+					style={{
+						width: "8px",
+						height: "8px",
+						borderRadius: "50%",
+						backgroundColor: mcpEnabled ? "#22c55e" : "#d1d5db",
+						flexShrink: 0,
+					}}
+				/>
+				<span style={{ color: "#374151", fontWeight: 500, whiteSpace: "nowrap" }}>
+					Filesystem {mcpEnabled ? "Connected" : "Disconnected"}
+				</span>
+				<input
+					type="text"
+					value={mcpPath}
+					onChange={(e) => setMcpPath(e.target.value)}
+					disabled={hasSession}
+					placeholder="Path to directory"
+					style={{
+						flex: 1,
+						padding: "4px 8px",
+						borderRadius: "4px",
+						border: "1px solid #d1d5db",
+						fontSize: "13px",
+						fontFamily: "monospace",
+						backgroundColor: hasSession ? "#f3f4f6" : "#fff",
+					}}
+				/>
+				<button
+					type="button"
+					onClick={() => setMcpEnabled(!mcpEnabled)}
+					disabled={hasSession}
+					style={{
+						padding: "4px 12px",
+						borderRadius: "4px",
+						border: `1px solid ${mcpEnabled ? "#dc2626" : "#22c55e"}`,
+						backgroundColor: "transparent",
+						color: mcpEnabled ? "#dc2626" : "#16a34a",
+						cursor: hasSession ? "not-allowed" : "pointer",
+						fontSize: "13px",
+						whiteSpace: "nowrap",
+						opacity: hasSession ? 0.5 : 1,
+					}}
+				>
+					{mcpEnabled ? "Disconnect" : "Connect"}
+				</button>
+			</div>
 
 			{/* Input area */}
 			<div

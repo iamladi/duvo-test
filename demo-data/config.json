@@ -1,0 +1,23 @@
+{
+  "app": {
+    "name": "WidgetTracker",
+    "version": "2.1.0",
+    "environment": "production"
+  },
+  "database": {
+    "host": "db.example.com",
+    "port": 5432,
+    "name": "widgets_prod"
+  },
+  "features": {
+    "darkMode": true,
+    "analytics": true,
+    "betaFeatures": false,
+    "maxUploadSizeMb": 25
+  },
+  "notifications": {
+    "email": true,
+    "slack": true,
+    "webhookUrl": "https://hooks.example.com/notify"
+  }
+}
