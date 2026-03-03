@@ -1,7 +1,7 @@
 ---
 title: "Observable Automation View"
 type: Feature
-issue: null
+issue: https://github.com/iamladi/duvo-test/issues/2
 research: ["research/research-observable-automation.md", "research/state-model-spec.md", "research/research-observable-automation-ui.md"]
 status: Ready for Implementation
 reviewed: true
