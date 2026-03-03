@@ -11,6 +11,8 @@ const initialState: AgentViewState = {
 		tools: [],
 	},
 	lastResult: null,
+	lastEvaluation: null,
+	evaluationStatus: "idle",
 	error: null,
 	rawEvents: [],
 	createdFiles: [],
@@ -313,6 +315,139 @@ describe("agentViewReducer", () => {
 
 			expect(state.automation).toBe("error");
 			expect(state.error?.message).toContain("error_max_turns");
+		});
+	});
+
+	describe("RESULT sets evaluationStatus to pending (only when idle)", () => {
+		it("sets evaluationStatus to pending when previously idle", () => {
+			const state = agentViewReducer(initialState, {
+				type: "RESULT",
+				result: {
+					subtype: "success",
+					result: "Done",
+					totalCostUsd: 0.01,
+					durationMs: 5000,
+					numTurns: 2,
+					usage: {
+						inputTokens: 100,
+						outputTokens: 50,
+						cacheCreationInputTokens: 0,
+						cacheReadInputTokens: 0,
+					},
+				},
+			});
+
+			expect(state.evaluationStatus).toBe("pending");
+			expect(state.lastEvaluation).toBeNull();
+		});
+
+		it("does not overwrite evaluationStatus when EVALUATION arrived first (evaluation → result ordering)", () => {
+			// Simulate server ordering: evaluation SSE arrives before result SSE
+			let state = agentViewReducer(initialState, {
+				type: "EVALUATION",
+				evaluation: {
+					passed: true,
+					confidence: 0.85,
+					reasoning: "Task done",
+					evaluatedBy: "llm",
+					status: "ok",
+				},
+			});
+			expect(state.evaluationStatus).toBe("complete");
+
+			state = agentViewReducer(state, {
+				type: "RESULT",
+				result: {
+					subtype: "success",
+					result: "Done",
+					totalCostUsd: 0.01,
+					durationMs: 5000,
+					numTurns: 2,
+					usage: {
+						inputTokens: 100,
+						outputTokens: 50,
+						cacheCreationInputTokens: 0,
+						cacheReadInputTokens: 0,
+					},
+				},
+			});
+
+			// evaluationStatus should remain "complete", not be reset to "pending"
+			expect(state.evaluationStatus).toBe("complete");
+			expect(state.lastEvaluation?.passed).toBe(true);
+		});
+	});
+
+	describe("EVALUATION", () => {
+		it("resolves to complete on ok status", () => {
+			const state = agentViewReducer(initialState, {
+				type: "EVALUATION",
+				evaluation: {
+					passed: true,
+					confidence: 0.9,
+					reasoning: "Task completed successfully",
+					evaluatedBy: "llm",
+					status: "ok",
+				},
+			});
+
+			expect(state.evaluationStatus).toBe("complete");
+			expect(state.lastEvaluation?.passed).toBe(true);
+			expect(state.lastEvaluation?.confidence).toBe(0.9);
+		});
+
+		it("resolves to complete with pass=false", () => {
+			const state = agentViewReducer(initialState, {
+				type: "EVALUATION",
+				evaluation: {
+					passed: false,
+					confidence: 0.7,
+					reasoning: "Agent did not fulfill the request",
+					evaluatedBy: "llm",
+					status: "ok",
+				},
+			});
+
+			expect(state.evaluationStatus).toBe("complete");
+			expect(state.lastEvaluation?.passed).toBe(false);
+		});
+
+		it("resolves to error on error status", () => {
+			const state = agentViewReducer(initialState, {
+				type: "EVALUATION",
+				evaluation: {
+					passed: false,
+					confidence: 0,
+					reasoning: "Evaluation failed",
+					evaluatedBy: "llm",
+					status: "error",
+				},
+			});
+
+			expect(state.evaluationStatus).toBe("error");
+			expect(state.lastEvaluation?.status).toBe("error");
+		});
+	});
+
+	describe("SUBMIT_PROMPT resets evaluation state", () => {
+		it("clears lastEvaluation and evaluationStatus on new prompt", () => {
+			let state = agentViewReducer(initialState, {
+				type: "EVALUATION",
+				evaluation: {
+					passed: true,
+					confidence: 0.9,
+					reasoning: "Task done",
+					evaluatedBy: "llm",
+					status: "ok",
+				},
+			});
+			state = agentViewReducer(state, {
+				type: "SUBMIT_PROMPT",
+				prompt: "New task",
+			});
+
+			expect(state.lastEvaluation).toBeNull();
+			expect(state.evaluationStatus).toBe("idle");
 		});
 	});
 

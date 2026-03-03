@@ -241,6 +241,23 @@ export interface TurnCompleteEvent {
 	};
 }
 
+// ============================================================
+// Evaluation Types
+// ============================================================
+
+export interface EvaluationResult {
+	passed: boolean;
+	confidence: number; // 0–1
+	reasoning: string;
+	evaluatedBy: "heuristic" | "llm";
+	status: "ok" | "error";
+}
+
+export interface EvaluationEvent {
+	event: "evaluation";
+	data: EvaluationResult;
+}
+
 export interface ResultEvent {
 	event: "result";
 	data: TurnResult;
@@ -269,6 +286,7 @@ export type SSEEvent =
 	| SessionInitEvent
 	| TurnStartEvent
 	| TurnCompleteEvent
+	| EvaluationEvent
 	| ResultEvent
 	| ErrorEvent
 	| DoneEvent;
@@ -293,6 +311,8 @@ export interface AgentViewState {
 	automation: AutomationState;
 	conversation: Conversation;
 	lastResult: TurnResult | null;
+	lastEvaluation: EvaluationResult | null;
+	evaluationStatus: "idle" | "pending" | "complete" | "error";
 	error: { message: string; code?: string } | null;
 	rawEvents: RawEvent[];
 	createdFiles: CreatedFile[];
@@ -319,6 +339,7 @@ export type StateAction =
 	  }
 	| { type: "STEP_ERROR"; stepId: StepId; error: string }
 	| { type: "RESULT"; result: TurnResult }
+	| { type: "EVALUATION"; evaluation: EvaluationResult }
 	| { type: "ERROR"; message: string; code?: string }
 	| { type: "RAW_EVENT"; event: RawEvent }
 	| { type: "FILE_CREATED"; file: CreatedFile };

@@ -3,6 +3,7 @@ import { streamSSE } from "hono/streaming";
 import { readdirSync } from "fs";
 import { join, resolve } from "path";
 import type { AgentRequest, SSEEvent } from "shared";
+import { evaluate } from "./evaluator";
 import { StepTracker } from "./step-tracker";
 import {
 	createSession,
@@ -166,6 +167,17 @@ app.post("/api/agent", async (c) => {
 									}),
 								});
 							}
+						}
+					}
+
+					// Hook A: evaluate task completion before StepTracker emits result + done
+					if (sdkMessage.type === "result") {
+						const evalResult = await evaluate(sdkMessage, session);
+						session.lastEvaluation = evalResult;
+						try {
+							await emitSSEEvent(stream, { event: "evaluation", data: evalResult });
+						} catch {
+							// Stream may be closed
 						}
 					}
 
