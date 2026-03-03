@@ -3,8 +3,11 @@ import {
   query as sdkQuery,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { mkdirSync } from "fs";
+import { basename, isAbsolute, join } from "path";
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+export const SESSION_BASE = "/tmp/duvo-sessions";
 
 /**
  * Queue-based async iterable that keeps the SDK's streamInput for-await loop
@@ -48,6 +51,7 @@ export type Session = {
   queue: MessageQueue;
   streaming: boolean;
   ttlTimer: ReturnType<typeof setTimeout>;
+  sessionDir: string;
 };
 
 const sessions = new Map<string, Session>();
@@ -72,10 +76,23 @@ function resetTTL(session: Session): void {
   );
 }
 
-export function createSession(prompt: string): Session {
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant with access to web search and file tools.
+
+When a task requires saving data to a file:
+- Use the Write tool to create the file in the current directory with a relative path (e.g. "results.csv", not "/absolute/path/results.csv")
+- Do NOT include the file contents in your message — just confirm what you saved and the filename
+- After saving, reply with a brief summary: what you found and where you saved it
+
+For CSV files, always include a header row.`;
+
+export function createSession(prompt: string, systemPrompt?: string): Session {
   const id = crypto.randomUUID();
   const ac = new AbortController();
   const queue = new MessageQueue();
+
+  // Create per-session output directory
+  const sessionDir = join(SESSION_BASE, id);
+  mkdirSync(sessionDir, { recursive: true });
 
   // Enqueue first message — the SDK's streamInput for-await loop will read it immediately
   queue.enqueue(makeUserMessage(prompt, ""));
@@ -84,11 +101,28 @@ export function createSession(prompt: string): Session {
     prompt: queue,
     options: {
       model: "claude-sonnet-4-6",
-      allowedTools: [],
+      allowedTools: ["WebSearch", "WebFetch", "Write", "Bash", "Read"],
+      maxTurns: 10,
+      cwd: sessionDir,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
       abortController: ac,
+      // Redirect Write tool absolute paths into the session directory
+      canUseTool: async (toolName, input) => {
+        if (toolName === "Write") {
+          const filePath = input.file_path as string | undefined;
+          if (filePath && isAbsolute(filePath) && !filePath.startsWith(sessionDir)) {
+            const remapped = join(sessionDir, basename(filePath));
+            return {
+              behavior: "allow" as const,
+              updatedInput: { ...input, file_path: remapped },
+            };
+          }
+        }
+        return { behavior: "allow" as const, updatedPermissions: [] };
+      },
+      systemPrompt: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
       // Clear CLAUDECODE env var to allow subprocess when running inside Claude Code
       env: { ...process.env, CLAUDECODE: undefined },
     },
@@ -100,6 +134,7 @@ export function createSession(prompt: string): Session {
     query: q,
     queue,
     streaming: false,
+    sessionDir,
     ttlTimer: setTimeout(() => deleteSession(id), SESSION_TTL_MS),
   };
   sessions.set(id, session);

@@ -1,11 +1,14 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { readdirSync } from "fs";
+import { join, resolve } from "path";
 import type { AgentRequest } from "shared";
 import {
   createSession,
   deleteSession,
   feedFollowUp,
   getSession,
+  SESSION_BASE,
   type Session,
 } from "./sessions";
 
@@ -16,6 +19,8 @@ const FORWARDED_TYPES = new Set([
   "stream_event",
   "assistant",
   "result",
+  "tool_progress",
+  "tool_use_summary",
 ]);
 
 app.post("/api/agent", async (c) => {
@@ -40,7 +45,7 @@ app.post("/api/agent", async (c) => {
     session = existing;
     isFollowUp = true;
   } else {
-    session = createSession(body.prompt);
+    session = createSession(body.prompt, body.systemPrompt);
   }
 
   session.streaming = true;
@@ -76,9 +81,31 @@ app.post("/api/agent", async (c) => {
             session.sdkSessionId = msg.session_id;
           }
 
-          // Forward only relevant event types to client
+          // Detect file persistence via SDKFilesPersistedEvent
+          // type: "system", subtype: "files_persisted"
+          if (
+            msg.type === "system" &&
+            "subtype" in msg &&
+            msg.subtype === "files_persisted" &&
+            "files" in msg &&
+            Array.isArray(msg.files)
+          ) {
+            for (const file of msg.files as Array<{ filename: string }>) {
+              if (file.filename) {
+                await stream.writeSSE({
+                  event: "file_created",
+                  data: JSON.stringify({
+                    type: "file_created",
+                    filename: file.filename,
+                    downloadUrl: `/api/files/${session.id}/${file.filename}`,
+                  }),
+                });
+              }
+            }
+          }
+
+          // Forward relevant event types to client
           if (FORWARDED_TYPES.has(msg.type)) {
-            // Override session_id with our ID so client can use it for follow-ups
             const clientMsg = { ...msg, session_id: session.id };
             await stream.writeSSE({
               event: msg.type,
@@ -86,8 +113,23 @@ app.post("/api/agent", async (c) => {
             });
           }
 
-          // Stop iterating after result — keep query alive for follow-ups
+          // After result: scan session directory for any created files and emit file_created
           if (msg.type === "result") {
+            try {
+              const files = readdirSync(session.sessionDir);
+              for (const filename of files) {
+                await stream.writeSSE({
+                  event: "file_created",
+                  data: JSON.stringify({
+                    type: "file_created",
+                    filename,
+                    downloadUrl: `/api/files/${session.id}/${filename}`,
+                  }),
+                });
+              }
+            } catch {
+              // Session dir may not exist or be empty — not an error
+            }
             break;
           }
         }
@@ -116,6 +158,50 @@ app.post("/api/agent", async (c) => {
       console.error("SSE stream error:", err);
     },
   );
+});
+
+app.get("/api/files/:sessionId/:filename", async (c) => {
+  const { sessionId, filename } = c.req.param();
+
+  // Path traversal prevention
+  if (
+    !sessionId ||
+    !filename ||
+    sessionId.includes("..") ||
+    filename.includes("..") ||
+    sessionId.includes("/") ||
+    filename.includes("/")
+  ) {
+    return c.json({ error: "Invalid path" }, 400);
+  }
+
+  const filePath = resolve(join(SESSION_BASE, sessionId, filename));
+  const expectedBase = resolve(join(SESSION_BASE, sessionId));
+
+  if (!filePath.startsWith(expectedBase + "/") && filePath !== expectedBase) {
+    return c.json({ error: "Access denied" }, 403);
+  }
+
+  const file = Bun.file(filePath);
+  if (!(await file.exists())) {
+    return c.json({ error: "File not found" }, 404);
+  }
+
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const mimeTypes: Record<string, string> = {
+    csv: "text/csv",
+    txt: "text/plain",
+    json: "application/json",
+    md: "text/markdown",
+  };
+
+  return new Response(file.stream(), {
+    headers: {
+      "Content-Type": mimeTypes[ext] ?? "application/octet-stream",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": String(file.size),
+    },
+  });
 });
 
 app.get("/", (c) => c.text("duvo-test server"));
